@@ -199,3 +199,36 @@ class UnigramSampler:
                 self.vocab_size, self.sample_size, replace=False, p=p)
 
         return negative_sample
+
+
+def analogy(a, b, c, word_to_id, id_to_word, word_matrix, top=5, answer=None):
+    for word in (a, b, c):
+        if word not in word_to_id:
+            print(f'{word} is not found.')
+            return
+
+    print(f'\nanalogy {a}:{b} = {c}:?')
+
+    a_vec = word_matrix[word_to_id[a]]
+    b_vec = word_matrix[word_to_id[b]]
+    c_vec = word_matrix[word_to_id[c]]
+
+    query_vec = normalize(b_vec - a_vec + c_vec)
+    
+    similarity = np.dot(word_matrix, query_vec)
+
+    if answer is not None:
+        print(f'===> {answer}:{np.dot(word_matrix[word_to_id[answer]], query_vec)}')
+    
+    count = 0
+    for i in -1 * similarity.argsort():
+        if np.isnan(similarity[i]):
+            continue
+        
+        if id_to_word[i] in (a, b, c):
+            continue
+        print(f'{id_to_word[i]}:{similarity[i]}')
+            
+        count += 1
+        if count >= top:
+            return

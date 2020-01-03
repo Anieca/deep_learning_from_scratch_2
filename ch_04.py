@@ -1,11 +1,11 @@
 import numpy as np
 import pickle
 
-from src.datasets import ptb
+from datasets import ptb
 from src.links import CBOW
 from src.optimizers import Adam
 from src.trainer import Trainer
-from src.utils import create_contexts_target, most_sililar
+from src.utils import create_contexts_target, most_sililar, analogy
 
 
 def train():
@@ -39,7 +39,7 @@ def train():
 
 def evaluate():
     pkl_file = 'cbow_params.pkl'
-    with open(pkl_file, 'wr') as f:
+    with open(pkl_file, 'rb') as f:
         params = pickle.load(f)
 
     word_vecs = params['word_vecs']
@@ -50,7 +50,19 @@ def evaluate():
     for query in queries:
         most_sililar(query, word_to_id, id_to_word, word_vecs)
 
+    opt = {
+        'word_to_id': word_to_id,
+        'id_to_word': id_to_word,
+        'word_matrix': word_vecs
+    }
+
+    print('-'*50)
+    analogy('king', 'man', 'queen', **opt)
+    analogy('take', 'took', 'go', **opt)
+    analogy('car', 'cars', 'child', **opt)
+    analogy('good', 'better', 'bad', **opt)
+
 
 if __name__ == '__main__':
-    train()
+    # train()
     evaluate()
