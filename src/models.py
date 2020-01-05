@@ -208,13 +208,19 @@ class RNNLM:
     def reset_state(self):
         self.lstm_layer.reset_state()
 
-    def save_params(self, filename='RNN_params.pkl'):
+    def save_params(self, filename='weights/RNN_params.pkl'):
+        params = [param.astype(np.float16) for param in self.params]
         with open(filename, 'wb') as f:
-            pickle.dump(self.params, f)
+            pickle.dump(params, f)
 
-    def load_params(self, filename='RNN_params.pkl'):
+    def load_params(self, filename='weights/RNN_params.pkl'):
+        print('load params... ', end='')
         with open(filename, 'rb') as f:
-            self.params = pickle.load(f)
+            params = pickle.load(f)
+
+        for i, param in enumerate(self.params):
+            param[...] = params[i].astype('f')
+        print('done.')
 
 
 class BetterRNNLM:
@@ -274,10 +280,134 @@ class BetterRNNLM:
         for layer in self.lstm_layers:
             layer.reset_state()
 
-    def save_params(self, filename='RNN_params.pkl'):
+    def save_params(self, filename='weights/better_RNN_params.pkl'):
+        params = [param.astype(np.float16) for param in self.params]
         with open(filename, 'wb') as f:
-            pickle.dump(self.params, f)
+            pickle.dump(params, f)
 
-    def load_params(self, filename='RNN_params.pkl'):
+    def load_params(self, filename='weights/better_RNN_params.pkl'):
+        print('load params... ', end='')
         with open(filename, 'rb') as f:
-            self.params = pickle.load(f)
+            params = pickle.load(f)
+
+        for i, param in enumerate(self.params):
+            param[...] = params[i].astype('f')
+        print('done.')
+
+
+class Encoder:
+    def __init__(self, vocab_size, wordvec_size, hidden_size):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+        embed_W = (np.random.randn(V, D) / 100).astype('f')
+        lstm_Wx = (np.random.randn(D, 4 * H) / np.sqrt(D)).astype('f')
+        lstm_Wh = (np.random.randn(H, 4 * H) / np.sqrt(H)).astype('f')
+        lstm_b = np.zeros(4 * H).astype('f')
+
+        self.embed = TimeEmbedding(embed_W)
+        self.lstm = TimeLSTM(lstm_Wx, lstm_Wh, lstm_b, stateful=False)
+
+        self.params = []
+        self.grads = []
+        for layer in (self.embed, self.lstm):
+            self.params += layer.params
+            self.grads += layer.grads
+        self.hs = None
+
+    def forward(self, xs):
+        hs = self.embed.forward(xs)
+        hs = self.lstm.forward(hs)
+        self.hs = hs
+        return hs[:, -1, :]
+
+    def backward(self, dh):
+        dhs = np.zeros_like(self.hs)
+        dhs[:, -1, :] = dh
+
+        dout = self.lstm.backward(dhs)
+        dout = self.embed.backward(dout)
+        return dout
+
+
+class Decoder:
+    def __init__(self, vocab_size, wordvec_size, hidden_size):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+        embed_W = (np.random.randn(V, D) / 100).astype('f')
+        lstm_Wx = (np.random.randn(D, 4 * H) / np.sqrt(D)).astype('f')
+        lstm_Wh = (np.random.randn(H, 4 * H) / np.sqrt(H)).astype('f')
+        lstm_b = np.zeros(4 * H).astype('f')
+        affine_W = (np.random.randn(H, V) / np.sqrt(H)).astype('f')
+        affine_b = np.zeros(V).astype('f')
+
+        self.embed = TimeEmbedding(embed_W)
+        self.lstm = TimeLSTM(lstm_Wx, lstm_Wh, lstm_b, stateful=True)
+        self.affine = TimeAffine(affine_W, affine_b)
+
+        self.params = []
+        self.grads = []
+        for layer in (self.embed, self.lstm, self.affine):
+            self.params += layer.params
+            self.grads += layer.grads
+
+    def forward(self, xs, h):
+        self.lstm.set_state(h)
+
+        hs = self.embed.forward(xs)
+        hs = self.lstm.forward(hs)
+        out = self.affine.forward(hs)
+        return out
+
+    def backward(self, dout):
+        dout = self.affine.backward(dout)
+        dout = self.lstm.backward(dout)
+        dout = self.embed.backward(dout)
+        dh = self.lstm.dh
+        return dh
+
+    def generate(self, h, start_id, sample_size):
+        sampled = []
+        sample_id = start_id
+        self.lstm.set_state(h)
+
+        for _ in range(sample_size):
+            x = np.array(sample_id).reshape((1, 1))
+            h = self.embed.forward(x)
+            h = self.lstm.forward(h)
+            y = self.affine.forward(h)
+            sample_id = np.argmax(y.flatten())
+            sampled.append(sample_id)
+
+        return sampled
+
+
+class Seq2Seq:
+    def __init__(self, vocab_size, wordvec_size, hidden_size):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+        self.encoder = Encoder(V, D, H)
+        self.decoder = Decoder(V, D, H)
+        self.loss_layer = TimeSoftmaxWithLoss()
+
+        self.params = []
+        self.grads = []
+        for layer in (self.encoder, self.decoder):
+            self.params += layer.params
+            self.grads += layer.grads
+
+    def forward(self, xs, ts):
+        decoder_xs = ts[:, :-1]
+        decoder_ts = ts[:, 1:]
+
+        h = self.encoder.forward(xs)
+        ys = self.decoder.forward(decoder_xs, h)
+        loss = self.loss_layer.forward(ys, decoder_ts)
+        return loss
+
+    def backward(self, dout=1):
+        dy = self.loss_layer.backward(dout)
+        dh = self.decoder.backward(dy)
+        dout = self.encoder.backward(dh)
+        return dout
+
+    def generate(self, xs, start_id, sample_size):
+        h = self.encoder.forward(xs)
+        sampled = self.decoder.generate(h, start_id, sample_size)
+        return sampled
