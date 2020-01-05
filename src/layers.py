@@ -1,3 +1,4 @@
+import pickle
 import numpy as np
 
 from src.functions import softmax, cross_entropy_error, sigmoid
@@ -83,44 +84,6 @@ class SigmoidWithLoss:
         return dx
 
 
-class TwoLayerNet:
-    def __init__(self, in_size, hidden_size, out_size):
-        i, h, o = in_size, hidden_size, out_size
-        W1 = 0.01 * np.random.randn(i, h)
-        b1 = np.zeros((h))
-        W2 = 0.01 * np.random.randn(h, o)
-        b2 = np.zeros((o))
-
-        self.layers = [
-            Affine(W1, b1),
-            Sigmoid(),
-            Affine(W2, b2)
-        ]
-        self.loss_layer = SoftmaxWithLoss()
-
-        self.params = []
-        self.grads = []
-        for layer in self.layers:
-            self.params += layer.params
-            self.grads += layer.grads
-
-    def predict(self, x):
-        for layer in self.layers:
-            x = layer.forward(x)
-        return x
-
-    def forward(self, x, t):
-        y = self.predict(x)
-        loss = self.loss_layer.forward(y, t)
-        return loss
-
-    def backward(self, dout=1):
-        dout = self.loss_layer.backward(dout)
-        for layer in reversed(self.layers):
-            dout = layer.backward(dout)
-        return dout
-
-
 class Matmul:
     def __init__(self, W):
         self.params = [W]
@@ -138,42 +101,6 @@ class Matmul:
         dW = np.dot(self.x.T, dout)
         self.grads[0][...] = dW
         return dx
-
-
-class SimpleCBOW:
-    def __init__(self, vocab_size, hidden_size):
-        W_in = 0.01 * np.random.randn(vocab_size, hidden_size)
-        W_out = 0.01 * np.random.randn(hidden_size, vocab_size)
-
-        self.in_layer0 = Matmul(W_in)
-        self.in_layer1 = Matmul(W_in)
-        self.out_layer = Matmul(W_out)
-        self.loss_layer = SoftmaxWithLoss()
-
-        layers = [self.in_layer0, self.in_layer1, self.out_layer]
-        self.params = []
-        self.grads = []
-        for layer in layers:
-            self.params += layer.params
-            self.grads += layer.grads
-
-        self.word_vecs = W_in
-
-    def forward(self, contexts, target):
-        h0 = self.in_layer0.forward(contexts[:, 0])
-        h1 = self.in_layer1.forward(contexts[:, 1])
-        h = 0.5 * (h0 + h1)
-
-        y = self.out_layer.forward(h)
-        loss = self.loss_layer.forward(y, target)
-        return loss
-
-    def backward(self, dout=1):
-        ds = self.loss_layer.backward(dout)
-        da = self.out_layer.backward(ds)
-        da *= 0.5
-        self.in_layer0.backward(da)
-        self.in_layer1.backward(da)
 
 
 class Embedding:
@@ -251,44 +178,6 @@ class NegativeSamplingLoss:
             dy = l0.backward(dout)
             dh += l1.backward(dy)
         return dh
-
-
-class CBOW:
-    def __init__(self, vocab_size, hidden_size, window_size, corpus):
-
-        W_in = 0.01 * np.random.randn(vocab_size, hidden_size).astype('f')
-        W_out = 0.01 * np.random.randn(vocab_size, hidden_size).astype('f')
-
-        self.in_layers = []
-        for i in range(window_size * 2):
-            layer = Embedding(W_in)
-            self.in_layers.append(layer)
-
-        self.ns_loss = NegativeSamplingLoss(W_out, corpus)
-
-        layers = self.in_layers + [self.ns_loss]
-
-        self.params = []
-        self.grads = []
-        for layer in layers:
-            self.params += layer.params
-            self.grads += layer.grads
-
-        self.word_vecs = W_in
-
-    def forward(self, contexts, target):
-        h = 0
-        for i, layer in enumerate(self.in_layers):
-            h += layer.forward(contexts[:, i])
-        h *= 1 / len(self.in_layers)
-        loss = self.ns_loss.forward(h, target)
-        return loss
-
-    def backward(self, dout=1):
-        dh = self.ns_loss.backward(dout)
-        dh *= 1 / len(self.in_layers)
-        for layer in self.in_layers:
-            layer.backward(dh)
 
 
 class RNN:
@@ -526,3 +415,182 @@ class SimpleRNNLM:
 
     def reset_state(self):
         self.rnn_layer.reset_state()
+
+
+class LSTM:
+    def __init__(self, Wx, Wh, b):
+        self.params = [Wx, Wh, b]
+        self.grads = [np.zeros_like(Wx), np.zeros_like(Wh), np.zeros_like(b)]
+        self.cache = None
+
+    def forward(self, x, h_prev, c_prev):
+        Wx, Wh, b = self.params
+        N, H = h_prev.shape
+
+        A = np.dot(x, Wx) + np.dot(h_prev, Wh) + b
+
+        f = sigmoid(A[:, 0*H:1*H])
+        g = np.tanh(A[:, 1*H:2*H])
+        i = sigmoid(A[:, 2*H:3*H])
+        o = sigmoid(A[:, 3*H:4*H])
+
+        c_next = c_prev * f + i * g
+        h_next = np.tanh(c_next) * o
+
+        self.cache = (x, h_prev, c_prev, i, f, g, o, c_next)
+
+        return h_next, c_next
+
+    def backward(self, dh_next, dc_next):
+        Wx, Wh, b = self.params
+        x, h_prev, c_prev, i, f, g, o, c_next = self.cache
+
+        tanh_c_next = np.tanh(c_next)
+        ds = (dh_next * o) * (1 - tanh_c_next ** 2) + dc_next
+
+        dc_prev = ds * f
+
+        di = ds * g
+        df = ds * c_prev
+        do = dh_next * tanh_c_next
+        dg = ds * i
+
+        di *= i * (1 - i)
+        df *= f * (1 - f)
+        do *= o * (1 - o)
+        dg *= (1 - g ** 2)
+
+        dA = np.hstack((df, dg, di, do))
+
+        dWh = np.dot(h_prev.T, dA)
+        dWx = np.dot(x.T, dA)
+        db = dA.sum(axis=0)
+
+        self.grads[0][...] = dWx
+        self.grads[1][...] = dWh
+        self.grads[2][...] = db
+
+        dx = np.dot(dA, Wx.T)
+        dh_prev = np.dot(dA, Wh.T)
+
+        return dx, dh_prev, dc_prev
+
+
+class TimeLSTM:
+    def __init__(self, Wx, Wh, b, stateful=False):
+        self.params = [Wx, Wh, b]
+        self.grads = [np.zeros_like(Wx), np.zeros_like(Wh), np.zeros_like(b)]
+        self.layers = None
+
+        self.h = None
+        self.c = None
+        self.dh = None
+        self.stateful = stateful
+
+    def forward(self, xs):
+        Wx, Wh, b = self.params
+        N, T, D = xs.shape
+        H = Wh.shape[0]
+
+        self.layers = []
+        hs = np.empty((N, T, H), dtype='f')
+
+        if not self.stateful or self.h is None:
+            self.h = np.zeros((N, H), dtype='f')
+
+        if not self.stateful or self.c is None:
+            self.c = np.zeros((N, H), dtype='f')
+
+        for t in range(T):
+            layer = LSTM(*self.params)
+            self.h, self.c = layer.forward(xs[:, t, :], self.h, self.c)
+            hs[:, t, :] = self.h
+            self.layers.append(layer)
+
+        return hs
+
+    def backward(self, dhs):
+        Wx, Wh, b = self.params
+        N, T, H = dhs.shape
+        D = Wx.shape[0]
+
+        dxs = np.empty((N, T, D), dtype='f')
+        dh = 0
+        dc = 0
+
+        grads = [0, 0, 0]
+        for t in reversed(range(T)):
+            layer = self.layers[t]
+            dx, dh, dc = layer.backward(dhs[:, t, :] + dh, dc)
+            dxs[:, t, :] = dx
+            for i, grad in enumerate(layer.grads):
+                grads[i] += grad
+
+        for i, grad in enumerate(grads):
+            self.grads[i][...] = grad
+
+        self.dh = dh
+        return dxs
+
+    def set_state(self, h, c=None):
+        self.h = h
+        self.c = c
+
+    def reset_state(self):
+        self.h = None
+        self.c = None
+
+
+class RNNLM:
+    def __init__(self, vocab_size=10000, wordvec_size=100, hidden_size=100):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+
+        embed_W = (np.random.randn(V, D) / 100).astype('f')
+        lstm_Wx = (np.random.randn(D, 4 * H) / np.sqrt(D)).astype('f')
+        lstm_Wh = (np.random.randn(H, 4 * H) / np.sqrt(H)).astype('f')
+        lstm_b = np.zeros(4 * H).astype('f')
+
+        affine_W = (np.random.randn(H, V) / np.sqrt(H)).astype('f')
+        affine_b = np.zeros(V).astype('f')
+
+        self.layers = [
+            TimeEmbedding(embed_W),
+            TimeLSTM(lstm_Wx, lstm_Wh, lstm_b, stateful=True),
+            TimeAffine(affine_W, affine_b)
+        ]
+        self.loss_layer = TimeSoftmaxWithLoss()
+        self.lstm_layer = self.layers[1]
+
+        self.params = []
+        self.grads = []
+
+        for layer in self.layers:
+            self.params += layer.params
+            self.grads += layer.grads
+
+    def predict(self, xs):
+        for layer in self.layers:
+            xs = layer.forward(xs)
+        return xs
+
+    def forward(self, xs, ts):
+        ys = self.predict(xs)
+        loss = self.loss_layer.forward(ys, ts)
+        return loss
+
+    def backward(self, dout=1):
+        dout = self.loss_layer.backward(dout)
+        for layer in reversed(self.layers):
+            dout = layer.backward(dout)
+        return dout
+
+    def reset_state(self):
+        self.lstm_layer.reset_state()
+
+    def save_params(self, filename='RNN_params.pkl'):
+        with open(filename, 'wb') as f:
+            pickle.dump(self.params, f)
+
+    def load_params(self, filename='RNN_params.pkl'):
+        with open(filename, 'rb') as f:
+            self.params = pickle.load(f)

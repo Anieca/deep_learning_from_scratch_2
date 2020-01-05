@@ -1,6 +1,6 @@
 from datasets import ptb
 from src.optimizers import SGD
-from src.links import SimpleRNNLM
+from src.models import SimpleRNNLM
 from src.trainer import RNNLMTrainer
 
 

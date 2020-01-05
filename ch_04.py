@@ -2,7 +2,7 @@ import numpy as np
 import pickle
 
 from datasets import ptb
-from src.links import CBOW
+from src.models import CBOW
 from src.optimizers import Adam
 from src.trainer import Trainer
 from src.utils import create_contexts_target, most_sililar, analogy
@@ -64,5 +64,5 @@ def evaluate():
 
 
 if __name__ == '__main__':
-    # train()
+    train()
     evaluate()

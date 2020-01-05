@@ -110,8 +110,8 @@ class RNNLMTrainer:
                 loss = model.forward(batch_x, batch_t)
                 model.backward()
                 params, grads = remove_duplicate(model.params, model.grads)
-                if max_grad:
-                    grads = clip_grads(grads, max_grad)
+                if max_grad is not None:
+                    clip_grads(grads, max_grad)
                 optimizer.update(params, grads)
                 total_loss += loss
                 loss_count += 1

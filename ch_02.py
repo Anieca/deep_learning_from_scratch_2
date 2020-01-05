@@ -1,7 +1,7 @@
 from sklearn.utils.extmath import randomized_svd
 
 from datasets import ptb
-from utils import create_co_matrix, ppmi, most_sililar
+from src.utils import create_co_matrix, ppmi, most_sililar
 
 
 def main():

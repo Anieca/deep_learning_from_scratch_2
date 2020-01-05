@@ -1,7 +1,7 @@
 from datasets.spiral import load_data
-from optimizers import SGD
-from links import TwoLayerNet
-from trainer import Trainer
+from src.optimizers import SGD
+from src.models import TwoLayerNet
+from src.trainer import Trainer
 
 
 def main():

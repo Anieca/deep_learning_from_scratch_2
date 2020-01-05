@@ -240,3 +240,32 @@ def normalize(x):
         s = np.sqrt((x * x).sum())
         x /= s
     return x
+
+
+def eval_perplexity(model, corpus, batch_size=10, time_size=35):
+    print('evaluating perplexity...')
+    corpus_size = len(corpus)
+    total_loss, loss_count = 0, 0
+    max_iters = (corpus_size - 1) // (batch_size * time_size)
+    jump = (corpus_size - 1) // batch_size
+
+    for iters in range(max_iters):
+        xs = np.zeros((batch_size, time_size), dtype='i')
+        ts = np.zeros((batch_size, time_size), dtype='i')
+        time_offset = iters * time_size
+        offsets = [time_offset + (i * jump) for i in range(batch_size)]
+
+        for t in range(time_size):
+            for i, offset in enumerate(offsets):
+                xs[i, t] = corpus[(offset + t) % corpus_size]
+                ts[i, t] = corpus[(offset + t + 1) % corpus_size]
+
+        loss = model.forward(xs, ts)
+        total_loss += loss
+        loss_count += 1
+
+        print(f'{iters} / {max_iters}')
+
+    print('')
+    ppl = np.exp(total_loss / loss_count)
+    return ppl

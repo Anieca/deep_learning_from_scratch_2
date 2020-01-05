@@ -1,7 +1,7 @@
-from links import SimpleCBOW
-from optimizers import Adam
-from trainer import Trainer
-from utils import preprocess, create_contexts_target, convert_one_hot
+from src.models import SimpleCBOW
+from src.optimizers import Adam
+from src.trainer import Trainer
+from src.utils import preprocess, create_contexts_target, convert_one_hot
 
 
 def main():
