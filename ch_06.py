@@ -76,5 +76,5 @@ def train_better_rnnlm():
 
 
 if __name__ == '__main__':
-    # train_rnnlm()
+    train_rnnlm()
     train_better_rnnlm()
