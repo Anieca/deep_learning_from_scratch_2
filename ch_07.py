@@ -1,7 +1,7 @@
 import numpy as np
 
 from datasets import ptb, sequence
-from src.models import RNNLM, BetterRNNLM, Seq2Seq
+from src.models import RNNLM, BetterRNNLM, Seq2Seq, PeekySeq2Seq
 from src.trainer import Trainer
 from src.optimizers import Adam
 from src.functions import softmax
@@ -79,10 +79,11 @@ def generate_text():
     print(text)
 
 
-def toy_program():
-    train, test = sequence.load_data()
-    x_train, t_train = train
-    x_test, t_test = test
+def toy_problem(reverse=False, peeky=False):
+    (x_train, t_train), (x_test, t_test) = sequence.load_data()
+    if reverse:
+        x_train = x_train[:, ::-1]
+        x_test = x_test[:, ::-1]
     char_to_id, id_to_char = sequence.get_vocab()
 
     vocab_size = len(char_to_id)
@@ -92,7 +93,11 @@ def toy_program():
     max_epoch = 25
     max_grad = 5.0
 
-    model = Seq2Seq(vocab_size, wordvec_size, hidden_size)
+    if peeky:
+        model = PeekySeq2Seq(vocab_size, wordvec_size, hidden_size)
+    else:
+        model = Seq2Seq(vocab_size, wordvec_size, hidden_size)
+
     optimizer = Adam()
     trainer = Trainer(model, optimizer)
 
@@ -105,7 +110,7 @@ def toy_program():
             question, correct = x_test[[i]], t_test[[i]]
             verbose = i < 10
             correct_num += eval_seq2seq(
-                model, question, correct, id_to_char, verbose)
+                model, question, correct, id_to_char, verbose, reverse)
 
         acc = float(correct_num) / len(x_test)
         acc_list.append(acc)
@@ -114,4 +119,6 @@ def toy_program():
 
 if __name__ == '__main__':
     # generate_text()
-    toy_program()
+    # toy_problem()
+    # toy_problem(reverse=True)
+    toy_problem(reverse=True, peeky=True)
