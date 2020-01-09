@@ -1,4 +1,3 @@
-import pickle
 import numpy as np
 
 from src.functions import softmax, cross_entropy_error, sigmoid
@@ -23,6 +22,23 @@ class Affine:
         db = np.sum(dout, axis=0)
         self.grads[0][...] = dW
         self.grads[1][...] = db
+        return dx
+
+
+class Softmax:
+    def __init__(self):
+        self.params = []
+        self.grads = []
+        self.out = None
+
+    def forward(self, x):
+        self.out = softmax(x)
+        return self.out
+
+    def backward(self, dout):
+        dx = dout * self.out
+        sumdx = np.sum(dx, axis=1, keepdims=True)
+        dx -= self.out * sumdx
         return dx
 
 
@@ -476,121 +492,95 @@ class LSTM:
         return dx, dh_prev, dc_prev
 
 
-class TimeLSTM:
-    def __init__(self, Wx, Wh, b, stateful=False):
-        self.params = [Wx, Wh, b]
-        self.grads = [np.zeros_like(Wx), np.zeros_like(Wh), np.zeros_like(b)]
-        self.layers = None
-
-        self.h = None
-        self.c = None
-        self.dh = None
-        self.stateful = stateful
-
-    def forward(self, xs):
-        Wx, Wh, b = self.params
-        N, T, D = xs.shape
-        H = Wh.shape[0]
-
-        self.layers = []
-        hs = np.empty((N, T, H), dtype='f')
-
-        if not self.stateful or self.h is None:
-            self.h = np.zeros((N, H), dtype='f')
-
-        if not self.stateful or self.c is None:
-            self.c = np.zeros((N, H), dtype='f')
-
-        for t in range(T):
-            layer = LSTM(*self.params)
-            self.h, self.c = layer.forward(xs[:, t, :], self.h, self.c)
-            hs[:, t, :] = self.h
-            self.layers.append(layer)
-
-        return hs
-
-    def backward(self, dhs):
-        Wx, Wh, b = self.params
-        N, T, H = dhs.shape
-        D = Wx.shape[0]
-
-        dxs = np.empty((N, T, D), dtype='f')
-        dh = 0
-        dc = 0
-
-        grads = [0, 0, 0]
-        for t in reversed(range(T)):
-            layer = self.layers[t]
-            dx, dh, dc = layer.backward(dhs[:, t, :] + dh, dc)
-            dxs[:, t, :] = dx
-            for i, grad in enumerate(layer.grads):
-                grads[i] += grad
-
-        for i, grad in enumerate(grads):
-            self.grads[i][...] = grad
-
-        self.dh = dh
-        return dxs
-
-    def set_state(self, h, c=None):
-        self.h = h
-        self.c = c
-
-    def reset_state(self):
-        self.h = None
-        self.c = None
-
-
-class RNNLM:
-    def __init__(self, vocab_size=10000, wordvec_size=100, hidden_size=100):
-        V, D, H = vocab_size, wordvec_size, hidden_size
-
-        embed_W = (np.random.randn(V, D) / 100).astype('f')
-        lstm_Wx = (np.random.randn(D, 4 * H) / np.sqrt(D)).astype('f')
-        lstm_Wh = (np.random.randn(H, 4 * H) / np.sqrt(H)).astype('f')
-        lstm_b = np.zeros(4 * H).astype('f')
-
-        affine_W = (np.random.randn(H, V) / np.sqrt(H)).astype('f')
-        affine_b = np.zeros(V).astype('f')
-
-        self.layers = [
-            TimeEmbedding(embed_W),
-            TimeLSTM(lstm_Wx, lstm_Wh, lstm_b, stateful=True),
-            TimeAffine(affine_W, affine_b)
-        ]
-        self.loss_layer = TimeSoftmaxWithLoss()
-        self.lstm_layer = self.layers[1]
-
+class WeighSum:
+    def __init__(self):
         self.params = []
         self.grads = []
+        self.cache = None
 
-        for layer in self.layers:
-            self.params += layer.params
-            self.grads += layer.grads
+    def forward(self, hs, a):
+        '''
+        Args:
+            hs(N, T, H)
+            a(N, T)
+        Returns:
+            cs(N, H)
+        '''
 
-    def predict(self, xs):
-        for layer in self.layers:
-            xs = layer.forward(xs)
-        return xs
+        N, T, H = hs.shape
+        ar = a.reshape(N, T, 1).repeat(H, axis=2)
+        t = hs * ar
+        c = np.sum(t, axis=1)
+        self.cache = (hs, ar)
+        return c
 
-    def forward(self, xs, ts):
-        ys = self.predict(xs)
-        loss = self.loss_layer.forward(ys, ts)
-        return loss
+    def backward(self, dc):
+        '''
+        Args:
+            dc(N, H):
+        Returns:
+            dhs:
+            da:
+        '''
+        hs, ar = self.cache
+        N, T, H = hs.shape
 
-    def backward(self, dout=1):
-        dout = self.loss_layer.backward(dout)
-        for layer in reversed(self.layers):
-            dout = layer.backward(dout)
-        return dout
+        dt = dc.reshape(N, 1, H).repeat(T, axis=1)
 
-    def reset_state(self):
-        self.lstm_layer.reset_state()
+        dar = dt * hs
+        dhs = dt * ar
 
-    def save_params(self, filename='RNN_params.pkl'):
-        with open(filename, 'wb') as f:
-            pickle.dump(self.params, f)
+        da = np.sum(dar, axis=2)
 
-    def load_params(self, filename='RNN_params.pkl'):
-        with open(filename, 'rb') as f:
-            self.params = pickle.load(f)
+        return dhs, da
+
+
+class AttentionWeight:
+    def __init__(self):
+        self.params = []
+        self.grads = []
+        self.softmax = Softmax()
+        self.cache = None
+
+    def forward(self, hs, h):
+        N, T, H = hs.shape
+        hr = h.reshape(N, 1, H).repeat(T, axis=1)
+        t = hs * hr
+        s = np.sum(t, axis=2)
+        a = self.softmax.forward(s)
+        self.cache = (hs, hr)
+        return a
+
+    def backward(self, da):
+        hs, hr = self.cache
+        N, T, H = hs.shape
+
+        ds = self.softmax.backward(da)
+        dt = ds.reshape(N, T, 1).repeat(H, axis=2)
+
+        dhr = dt * hs
+        dhs = dt * hr
+
+        dh = np.sum(dhr, axis=1)
+        return dhs, dh
+
+
+class Attention:
+    def __init__(self):
+        self.params = []
+        self.grads = []
+        self.attention_weight_layer = AttentionWeight()
+        self.weight_sum_layer = WeighSum()
+        self.attention_weight = None
+
+    def forward(self, hs, h):
+        a = self.attention_weight_layer.forward(hs, h)
+        self.attention_weight = a
+        c = self.weight_sum_layer.forward(hs, a)
+        return c
+
+    def backward(self, dc):
+        dhs0, da = self.weight_sum_layer.backward(dc)
+        dhs1, dh = self.attention_weight_layer.backward(da)
+        dhs = dhs0 + dhs1
+        return dhs, dh

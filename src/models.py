@@ -4,7 +4,7 @@ import numpy as np
 from src.layers import Affine, Sigmoid, Matmul, Embedding
 from src.layers import SoftmaxWithLoss, NegativeSamplingLoss
 from src.time_layers import TimeAffine, TimeEmbedding, TimeRNN, TimeLSTM
-from src.time_layers import TimeDropout, TimeSoftmaxWithLoss
+from src.time_layers import TimeAttention, TimeDropout, TimeSoftmaxWithLoss
 
 
 class TwoLayerNet:
@@ -485,6 +485,98 @@ class PeekySeq2Seq(Seq2Seq):
         V, D, H = vocab_size, wordvec_size, hidden_size
         self.encoder = Encoder(V, D, H)
         self.decoder = PeekyDecoder(V, D, H)
+        self.loss_layer = TimeSoftmaxWithLoss()
+
+        self.params = []
+        self.grads = []
+        for layer in (self.encoder, self.decoder):
+            self.params += layer.params
+            self.grads += layer.grads
+
+
+class AttentionEncoder(Encoder):
+    def forward(self, xs):
+        hs = self.embed.forward(xs)
+        hs = self.lstm.forward(hs)
+        return hs
+
+    def backward(self, dhs):
+        dout = self.lstm.backward(dhs)
+        dout = self.embed.backward(dout)
+        return dout
+
+
+class AttentionDecoder:
+    def __init__(self, vocab_size, wordvec_size, hidden_size):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+
+        embed_W = (np.random.randn(V, D) / 100).astype('f')
+        lstm_Wx = (np.random.randn(D, 4 * H) / np.sqrt(D)).astype('f')
+        lstm_Wh = (np.random.randn(H, 4 * H) / np.sqrt(H)).astype('f')
+        lstm_b = np.zeros(4 * H).astype('f')
+        affine_W = (np.random.randn(H + H, V) / np.sqrt(H)).astype('f')
+        affine_b = np.zeros(V).astype('f')
+
+        self.embed = TimeEmbedding(embed_W)
+        self.lstm = TimeLSTM(lstm_Wx, lstm_Wh, lstm_b, stateful=True)
+        self.attention = TimeAttention()
+        self.affine = TimeAffine(affine_W, affine_b)
+
+        self.params = []
+        self.grads = []
+        for layer in (self.embed, self.lstm, self.affine):
+            self.params += layer.params
+            self.grads += layer.grads
+        self.cache = None
+
+    def forward(self, xs, hs_enc):
+        N, T, H = hs_enc.shape
+        h = hs_enc[:, -1]
+        self.lstm.set_state(h)
+        out = self.embed.forward(xs)
+        hs_dec = self.lstm.forward(out)
+        c = self.attention.forward(hs_enc, hs_dec)
+        out = np.concatenate([c, hs_dec], axis=2)
+        out = self.affine.forward(out)
+        return out
+
+    def backward(self, dout=1):
+        dout = self.affine.backward(dout)
+        N, T, H2 = dout.shape
+        H = H2 // 2
+
+        dc, dhs_dec0 = dout[:, :, :H], dout[:, :, H:]
+        dhs_enc, dhs_dec1 = self.attention.backward(dc)
+        dhs_dec = dhs_dec0 + dhs_dec1
+        dout = self.lstm.backward(dhs_dec)
+        dh = self.lstm.dh
+        dhs_enc[:, -1] += dh
+        self.embed.backward(dout)
+        return dhs_enc
+
+    def generate(self, hs_enc, start_id, sample_size):
+        sampled = []
+        sample_id = start_id
+        h = hs_enc[:, -1, :]
+        self.lstm.set_state(h)
+
+        for _ in range(sample_size):
+            x = np.array(sample_id).reshape(1, 1)
+            out = self.embed.forward(x)
+            hs_dec = self.lstm.forward(out)
+            c = self.attention.forward(hs_enc, hs_dec)
+            y = self.affine.forward(np.concatenate([c, hs_dec], axis=2))
+            sample_id = np.argmax(y.flatten())
+            sampled.append(sample_id)
+
+        return sampled
+
+
+class AttentionSeq2Seq(Seq2Seq):
+    def __init__(self, vocab_size, wordvec_size, hidden_size):
+        V, D, H = vocab_size, wordvec_size, hidden_size
+        self.encoder = AttentionEncoder(V, D, H)
+        self.decoder = AttentionDecoder(V, D, H)
         self.loss_layer = TimeSoftmaxWithLoss()
 
         self.params = []
