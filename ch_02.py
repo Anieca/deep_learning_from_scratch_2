@@ -5,7 +5,6 @@ from src.utils import create_co_matrix, ppmi, most_sililar
 
 
 def main():
-
     window_size = 2
     wordvec_size = 100
 
